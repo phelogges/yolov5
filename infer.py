@@ -1,22 +1,11 @@
-import argparse
 import os
-import platform
 import sys
-from pathlib import Path
 
 import torch
-from ultralytics.data import augment
-
-FILE = Path(__file__).resolve()
-ROOT = FILE.parents[1]  # YOLOv5 root directory
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))  # add ROOT to PATH
-ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from ultralytics.utils.plotting import Annotator, colors, save_one_box
 
 from models.common import DetectMultiBackend
-from utils.dataloaders import IMG_FORMATS, VID_FORMATS, LoadImages, LoadScreenshots, LoadStreams
 from utils.general import (
     LOGGER,
     Profile,
@@ -34,7 +23,6 @@ from utils.general import (
     strip_optimizer,
 )
 from utils.segment.general import masks2segments, process_mask, process_mask_native
-from utils.torch_utils import select_device, smart_inference_mode
 
 from datetime import datetime
 
@@ -55,9 +43,25 @@ class Yolov5Segment:
                  max_det=1000,
                  agnostic_nms=False,
                  augment=False,
-                 retina_masks=False,
+                 retina_masks=True,
                  save_img=True,
                  save_txt=True):
+        """
+        Yolov5实例分割推理
+        :param checkpoint: str，模型地址
+        :param class_file: str，类别yaml文件
+        :param saved_dir: 推理结果存储文件夹
+        :param device: int，使用的GPU设备序号，若为-1则使用CPU推理
+        :param imgsz: tuple[2]，推理尺寸，默认（640， 640）
+        :param conf_thres: float，置信度阈值，默认0.25
+        :param iou_thres: float，iou阈值，默认0.45
+        :param max_det: int，最大检测框数，默认1000
+        :param agnostic_nms: bool，是否不区分类别全量做nms，默认False，即为每个类独立做nms
+        :param augment: bool，是否在推理时使用数据增强，默认False
+        :param retina_masks: bool，是否将mask缩放到原图大小，默认True
+        :param save_img: bool，是否存储带mask的图像，默认True，若存储，则按时间戳存储在saved_dir文件夹下
+        :param save_txt: bool，是否存储结果文本，默认True，若存储，则按时间戳存储在saved_dir文件夹下
+        """
         self.device = torch.device("cpu" if device == -1 else "cuda:" + str(device))
         self.model = DetectMultiBackend(checkpoint, self.device, class_file)
         self.stride, self.names, self.pt = self.model.stride, self.model.names, self.model.pt
@@ -89,7 +93,7 @@ class Yolov5Segment:
         timestamp = self._format_current_time()
         save_path = os.path.join(self.saved_dir, timestamp)  # with suffix, added latter
 
-        dt = Profile(device=self.device)
+        dt = (Profile(device=self.device), Profile(device=self.device), Profile(device=self.device))
         seen = 0
 
         with dt[0]:
@@ -119,6 +123,8 @@ class Yolov5Segment:
         s = ""
         s += "%gx%g " % im.shape[2:]  # print string
         annotator = Annotator(im0, 3, example=str(self.names))
+
+        result = None
         if len(det):
             if self.retina_masks:
                 # scale bbox first the crop masks
@@ -173,8 +179,6 @@ class Yolov5Segment:
             im0 = annotator.result()
             if self.save_img:
                 cv2.imwrite(f"{save_path}.jpg", im0)
-        else:
-            result = None
 
         LOGGER.info(f"{s}{'' if len(det) else '(no detections), '}{dt[1].dt * 1E3:.1f}ms")
 
@@ -188,6 +192,7 @@ class Yolov5Segment:
 
 if __name__ == "__main__":
     import argparse
+    import time
 
 
     def arg_parser():
@@ -213,4 +218,11 @@ if __name__ == "__main__":
 
     result = segment.infer(bgr)
 
-    print(result)
+    print(result[0])
+
+    loops = 1000
+    t0 = time.time()
+    for i in range(loops):
+        _ = segment.infer(bgr)
+    delta = time.time() - t0
+    print("Infer cost: {:.3f} ms".format(delta * 1000 / loops))
